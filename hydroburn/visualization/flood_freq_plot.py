@@ -23,39 +23,48 @@ def plot_flood_frequency(
     fig, ax = plt.subplots(figsize=(6, 4))
     
     # Plot observed data points
-    y_pre, x_pre = gumbel_plotting_positions(pre_maxima)
-    y_post, x_post = gumbel_plotting_positions(post_maxima)
-    
-    # Convert reduced variate to return period for x-axis
-    # T = 1 / (1 - exp(-exp(-y)))
-    # But we usually plot linear reduced variate and label with T
-    
-    ax.scatter(y_pre, x_pre, color=COLORS['pre_fire'], marker='o', 
-               s=30, alpha=0.6, label='Pre-fire Observed')
-    ax.scatter(y_post, x_post, color=COLORS['post_fire'], marker='^', 
-               s=50, alpha=0.8, label='Post-fire Observed')
+    if pre_maxima is not None and len(pre_maxima) > 0:
+        y_pre, x_pre = gumbel_plotting_positions(pre_maxima)
+        ax.scatter(y_pre, x_pre, color=COLORS['pre_fire'], marker='o', 
+                   s=30, alpha=0.6, label='Pre-fire Observed')
+        
+    if post_maxima is not None and len(post_maxima) > 0:
+        y_post, x_post = gumbel_plotting_positions(post_maxima)
+        ax.scatter(y_post, x_post, color=COLORS['post_fire'], marker='^', 
+                   s=50, alpha=0.8, label='Post-fire Observed')
     
     # Plot fitted curves from bootstrap results
     # We need to convert return periods to reduced variate y
-    T_vals = bootstrap_results['return_period'].values
+    T_vals = bootstrap_results.index.values
     y_vals = -np.log(-np.log(1 - 1/T_vals))
     
     # Pre-fire curve and CI
-    ax.plot(y_vals, bootstrap_results['pre_estimate'], color=COLORS['pre_fire'], 
-            linewidth=2, label='Pre-fire Fit')
-    ax.fill_between(y_vals, 
-                    bootstrap_results['pre_ci_lower'], 
-                    bootstrap_results['pre_ci_upper'],
-                    color=COLORS['pre_fire'], alpha=0.1)
+    if 'pre_estimate' in bootstrap_results.columns:
+        ax.plot(y_vals, bootstrap_results['pre_estimate'], color=COLORS['pre_fire'], 
+                linewidth=2, label='Pre-fire Fit')
+        ax.fill_between(y_vals, 
+                        bootstrap_results['pre_ci_lower'], 
+                        bootstrap_results['pre_ci_upper'],
+                        color=COLORS['pre_fire'], alpha=0.1)
     
     # Post-fire curve and CI
-    ax.plot(y_vals, bootstrap_results['post_estimate'], color=COLORS['post_fire'], 
-            linewidth=2, label='Post-fire Fit')
-    ax.fill_between(y_vals, 
-                    bootstrap_results['post_ci_lower'], 
-                    bootstrap_results['post_ci_upper'],
-                    color=COLORS['post_fire'], alpha=0.1)
+    if 'post_estimate' in bootstrap_results.columns:
+        ax.plot(y_vals, bootstrap_results['post_estimate'], color=COLORS['post_fire'], 
+                linewidth=2, label='Post-fire Fit')
+        ax.fill_between(y_vals, 
+                        bootstrap_results['post_ci_lower'], 
+                        bootstrap_results['post_ci_upper'],
+                        color=COLORS['post_fire'], alpha=0.1)
     
+    # Handle the case for a single period analysis
+    if 'estimate' in bootstrap_results.columns:
+        ax.plot(y_vals, bootstrap_results['estimate'], color=COLORS['pre_fire'], 
+                linewidth=2, label='Fit')
+        ax.fill_between(y_vals, 
+                        bootstrap_results['ci_lower'], 
+                        bootstrap_results['ci_upper'],
+                        color=COLORS['pre_fire'], alpha=0.1)
+
     # Configure x-axis (Gumbel scale)
     # Standard ticks for return periods: 2, 5, 10, 25, 50, 100
     ticks_T = np.array([1.01, 2, 5, 10, 25, 50, 100, 200])

@@ -136,9 +136,18 @@ def format_stats_table(stats_df: pd.DataFrame) -> str:
     rows = []
     for _, row in stats_df.iterrows():
         sig = "Significant" if row.get('pvalue', 1.0) < 0.05 else "Not Sig."
+        
+        pre_mean = row.get('pre_mean')
+        post_mean = row.get('post_mean')
+        change_pct = row.get('change_mean_pct')
+        
+        pre_str = f"{pre_mean:.2f}" if pre_mean is not None else "N/A"
+        post_str = f"{post_mean:.2f}" if post_mean is not None else "N/A"
+        change_str = f"{change_pct:+.1f}%" if change_pct is not None else "N/A"
+        
         rows.append(
-            f"| {row['metric']} | {row['pre_mean']:.2f} | {row['post_mean']:.2f} | "
-            f"{row['change_mean_pct']:+.1f}% | {sig} |"
+            f"| {row['metric']} | {pre_str} | {post_str} | "
+            f"{change_str} | {sig} |"
         )
     return "\n".join(rows)
 
@@ -178,12 +187,15 @@ def generate_report(
     # Determine key findings (simple logic)
     peak_change_row = stats_df[stats_df['metric'] == 'Peak Discharge (m³/s)']
     peak_change = peak_change_row['change_mean_pct'].iloc[0] if not peak_change_row.empty else 0
+    if peak_change is None: peak_change = 0
     
     vol_change_row = stats_df[stats_df['metric'] == 'Event Volume (mm)']
     vol_change = vol_change_row['change_mean_pct'].iloc[0] if not vol_change_row.empty else 0
+    if vol_change is None: vol_change = 0
         
     q100_ratio_row = flood_df[flood_df['return_period'] == 100]
     q100_ratio = q100_ratio_row['ratio'].iloc[0] if not q100_ratio_row.empty else 1.0
+    if q100_ratio is None: q100_ratio = 1.0
     
     # Fill template
     content = REPORT_TEMPLATE.format(

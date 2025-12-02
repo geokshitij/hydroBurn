@@ -15,10 +15,10 @@ import warnings
 
 def load_streamflow(
     filepath: str,
-    datetime_column: str = "datetime",
-    discharge_column: str = "00060_Mean",
-    timezone: str = "America/Denver",
-    quality_column: Optional[str] = "00060_Mean_cd",
+    datetime_column: Optional[str] = None,
+    discharge_column: Optional[str] = None,
+    timezone: str = "UTC",
+    quality_column: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     Load streamflow data from CSV file.
@@ -29,10 +29,10 @@ def load_streamflow(
     ----------
     filepath : str
         Path to CSV file
-    datetime_column : str
-        Name of datetime column
-    discharge_column : str
-        Name of discharge column
+    datetime_column : str, optional
+        Name of datetime column (if not specified, attempts to auto-detect)
+    discharge_column : str, optional
+        Name of discharge column (if not specified, attempts to auto-detect)
     timezone : str
         Target timezone (e.g., 'America/Denver' for MST/MDT)
     quality_column : str, optional
@@ -61,45 +61,55 @@ def load_streamflow(
     # Read CSV
     df = pd.read_csv(filepath)
     
-    # Validate required columns
-    if datetime_column not in df.columns:
-        raise ValueError(f"Datetime column '{datetime_column}' not found. "
-                        f"Available columns: {list(df.columns)}")
+    # Auto-detect columns if not specified
+    if datetime_column is None:
+        possible_dt_cols = ['datetime', 'DATETIME', 'timestamp', 'Timestamp', 'Date']
+        for col in possible_dt_cols:
+            if col in df.columns:
+                datetime_column = col
+                break
+        if datetime_column is None:
+            raise ValueError(f"Could not auto-detect datetime column. Please specify. Available: {list(df.columns)}")
+
+    if discharge_column is None:
+        possible_q_cols = ['00060_Mean', 'discharge', 'flow', 'Flow', 'Discharge']
+        for col in possible_q_cols:
+            if col in df.columns:
+                discharge_column = col
+                break
+        if discharge_column is None:
+            raise ValueError(f"Could not auto-detect discharge column. Please specify. Available: {list(df.columns)}")
+
+    # Rename to standard names
+    rename_dict = {
+        datetime_column: "datetime",
+        discharge_column: "discharge"
+    }
+    if quality_column and quality_column in df.columns:
+        rename_dict[quality_column] = "quality"
     
-    if discharge_column not in df.columns:
-        raise ValueError(f"Discharge column '{discharge_column}' not found. "
-                        f"Available columns: {list(df.columns)}")
-    
+    df = df.rename(columns=rename_dict)
+
     # Parse datetime
-    df[datetime_column] = pd.to_datetime(df[datetime_column])
+    df["datetime"] = pd.to_datetime(df["datetime"])
     
     # Handle timezone
-    if df[datetime_column].dt.tz is None:
+    if df["datetime"].dt.tz is None:
         # Assume UTC if no timezone info (USGS data is often in UTC)
-        df[datetime_column] = df[datetime_column].dt.tz_localize('UTC')
+        df["datetime"] = df["datetime"].dt.tz_localize('UTC')
     
-    # Convert to target timezone
-    df[datetime_column] = df[datetime_column].dt.tz_convert(timezone)
+    df = df.set_index("datetime")
+    df = df.tz_convert(timezone)
     
-    # Create clean output DataFrame
-    result = pd.DataFrame({
-        'datetime': df[datetime_column],
-        'discharge': pd.to_numeric(df[discharge_column], errors='coerce'),
-    })
+    # Convert discharge to numeric, coercing errors
+    df['discharge'] = pd.to_numeric(df['discharge'], errors='coerce')
     
-    # Add quality codes if available
-    if quality_column and quality_column in df.columns:
-        result['quality'] = df[quality_column]
-    
-    # Set datetime as index
-    result = result.set_index('datetime').sort_index()
-    
-    # Remove duplicate indices if any
-    if result.index.duplicated().any():
-        warnings.warn(f"Found {result.index.duplicated().sum()} duplicate timestamps. Keeping first.")
-        result = result[~result.index.duplicated(keep='first')]
-    
-    return result
+    # Select final columns
+    final_cols = ["discharge"]
+    if "quality" in df.columns:
+        final_cols.append("quality")
+        
+    return df[final_cols]
 
 
 def get_streamflow_info(df: pd.DataFrame) -> Dict:

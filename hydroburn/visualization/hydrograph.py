@@ -11,37 +11,62 @@ from .style import COLORS
 def plot_hydrograph(
     df: pd.DataFrame,
     discharge_col: str = "discharge",
-    fire_date: Optional[str] = None,
+    precip_col: Optional[str] = "precipitation",
+    fire_dates: Optional[list] = None,
+    post_fire_window_months: Optional[int] = None,
     title: str = "Streamflow Hydrograph",
     ylabel: str = "Discharge (m³/s)",
     output_path: Optional[str] = None
 ):
     """
-    Plot full hydrograph with fire date.
+    Plot full hydrograph with fire dates and optional precipitation.
     """
     fig, ax = plt.subplots(figsize=(8, 4))
+    
+    # Plot precipitation if available
+    if precip_col and precip_col in df.columns:
+        ax_precip = ax.twinx()
+        # Invert y-axis for precipitation
+        ax_precip.bar(df.index, df[precip_col], color='navy', alpha=0.7, width=2.0, label='Precipitation')
+        ax_precip.set_ylabel('Precipitation (mm)')
+        ax_precip.set_ylim(top=df[precip_col].max() * 3, bottom=0)  # Scale so bars take up top 1/3
+        ax_precip.invert_yaxis()
+        # Combine legends later if needed, or just let them be separate
     
     # Plot discharge
     ax.plot(df.index, df[discharge_col], color=COLORS['black'], 
             linewidth=0.8, label='Discharge')
     
-    # Add fire date line
-    if fire_date:
-        fire_dt = pd.to_datetime(fire_date)
-        if df.index.tz is not None and fire_dt.tz is None:
-            fire_dt = fire_dt.tz_localize(df.index.tz)
+    # Add fire date lines
+    if fire_dates:
+        for i, fire_date in enumerate(fire_dates):
+            fire_dt = pd.to_datetime(fire_date)
+            if df.index.tz is not None and fire_dt.tz is None:
+                fire_dt = fire_dt.tz_localize(df.index.tz)
             
-        ax.axvline(x=fire_dt, color=COLORS['fire_event'], 
-                   linestyle='--', linewidth=2, label='Fire Date')
+            label = 'Fire Event' if i == 0 else None
+            ax.axvline(x=fire_dt, color=COLORS['fire_event'], 
+                       linestyle='--', linewidth=1.5, label=label)
+            
+            # Shade post-fire period for this specific fire if window is defined
+            if post_fire_window_months:
+                end_dt = fire_dt + pd.DateOffset(months=post_fire_window_months)
+                label_shade = 'Post-fire Period' if i == 0 else None
+                ax.axvspan(fire_dt, end_dt, color=COLORS['post_fire'], 
+                           alpha=0.1, label=label_shade)
         
-        # Shade post-fire period
-        ax.axvspan(fire_dt, df.index.max(), color=COLORS['post_fire'], 
-                   alpha=0.1, label='Post-fire Period')
-    
+        # If no window defined, fall back to shading from first fire to end (legacy behavior)
+        if not post_fire_window_months:
+            first_fire_dt = pd.to_datetime(min(fire_dates))
+            if df.index.tz is not None and first_fire_dt.tz is None:
+                first_fire_dt = first_fire_dt.tz_localize(df.index.tz)
+            ax.axvspan(first_fire_dt, df.index.max(), color=COLORS['post_fire'], 
+                       alpha=0.1, label='Post-fire Period')
+
+    ax.legend(loc='upper right')
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xlabel('Date')
-    ax.legend(loc='upper right')
     
     # Format x-axis
     ax.xaxis.set_major_locator(mdates.YearLocator(5))
@@ -57,23 +82,26 @@ def plot_hydrograph(
 
 def plot_hydrograph_detail(
     df: pd.DataFrame,
-    fire_date: str,
+    fire_dates: list,
     window_days: int = 365,
     discharge_col: str = "discharge",
     baseflow_col: Optional[str] = "baseflow",
-    title: str = "Hydrograph Detail (Pre/Post Fire)",
+    title: str = "Hydrograph Detail (Around First Fire)",
     ylabel: str = "Discharge (m³/s)",
     output_path: Optional[str] = None
 ):
     """
-    Plot detailed hydrograph around fire date.
+    Plot detailed hydrograph around the first fire date.
     """
-    fire_dt = pd.to_datetime(fire_date)
-    if df.index.tz is not None and fire_dt.tz is None:
-        fire_dt = fire_dt.tz_localize(df.index.tz)
+    if not fire_dates:
+        return # Or raise an error
+
+    first_fire_dt = pd.to_datetime(min(fire_dates))
+    if df.index.tz is not None and first_fire_dt.tz is None:
+        first_fire_dt = first_fire_dt.tz_localize(df.index.tz)
     
-    start_date = fire_dt - pd.Timedelta(days=window_days)
-    end_date = fire_dt + pd.Timedelta(days=window_days)
+    start_date = first_fire_dt - pd.Timedelta(days=window_days)
+    end_date = first_fire_dt + pd.Timedelta(days=window_days)
     
     subset = df[(df.index >= start_date) & (df.index <= end_date)]
     
@@ -92,9 +120,15 @@ def plot_hydrograph_detail(
         ax.fill_between(subset.index, subset[baseflow_col], subset[discharge_col],
                         color=COLORS['quickflow'], alpha=0.3, label='Quickflow')
     
-    # Fire date
-    ax.axvline(x=fire_dt, color=COLORS['fire_event'], 
-               linestyle='--', linewidth=2, label='Fire Date')
+    # Fire dates
+    for fire_date in fire_dates:
+        fire_dt = pd.to_datetime(fire_date)
+        if df.index.tz is not None and fire_dt.tz is None:
+            fire_dt = fire_dt.tz_localize(df.index.tz)
+        
+        if start_date <= fire_dt <= end_date:
+            ax.axvline(x=fire_dt, color=COLORS['fire_event'], 
+                       linestyle='--', linewidth=2, label='Fire Event' if fire_date == min(fire_dates) else None)
     
     ax.set_title(title)
     ax.set_ylabel(ylabel)

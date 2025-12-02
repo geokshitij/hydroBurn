@@ -1,6 +1,6 @@
 """Analysis modules for HydroBurn."""
 
-from .events import extract_events, StormEvent
+from .events import extract_events, StormEvent, events_to_dataframe
 from .fdc import compute_fdc, compare_fdc
 from .flood_freq import (
     fit_gumbel,
@@ -11,6 +11,7 @@ from .flood_freq import (
 )
 from .statistics import (
     pre_post_statistical_tests,
+    perform_before_after_analysis,
     pettitt_test,
     mann_kendall_test,
     compute_summary_statistics,
@@ -20,6 +21,7 @@ from .statistics import (
 __all__ = [
     "extract_events",
     "StormEvent",
+    "events_to_dataframe",
     "compute_fdc",
     "compare_fdc",
     "fit_gumbel",

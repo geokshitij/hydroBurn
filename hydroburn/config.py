@@ -4,7 +4,7 @@ Configuration module for HydroBurn.
 Defines the HydroBurnConfig dataclass with all analysis parameters.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import List, Optional
 import yaml
@@ -13,25 +13,29 @@ from datetime import datetime
 
 @dataclass
 class HydroBurnConfig:
-    """Configuration for HydroBurn post-wildfire runoff analysis."""
+    """Configuration for a HydroBurn analysis."""
+    # Core inputs
+    station_id: str
+    streamflow_file: str
+    catchment_file: str
+    precipitation_file: Optional[str] = None  # Path to precipitation CSV
     
-    # Input files
-    catchment_file: str = "catchments/USGS_08390500.shp"
-    streamflow_file: str = "streamflows/08390500.csv"
+    # Optional inputs with defaults
+    fire_history_file: Optional[str] = None  # Path to fire history shapefile
+    burn_area_threshold_pct: float = 1.0  # Min % of catchment burned to count as a fire year
+    burn_area_threshold_km2: Optional[float] = None  # Min area (km2) burned to count as a fire year
+    config_file: Optional[str] = None
+    output_dir: str = "output"
+    discharge_units: str = "cfs"  # 'cfs' or 'm3s'
+    discharge_column: str = "discharge"
+    timezone: str = "UTC"
     
     # Key dates
-    fire_date: str = "2024-06-17"
-    fire_name: str = "South Fork / Salt Fires"
+    fire_date: Optional[str] = None
+    fire_name: str = "Wildfire Event"
     
     # Station metadata
-    station_id: str = "08390500"
     station_name: str = "Rio Ruidoso at Hollywood, NM"
-    
-    # Data specifications
-    discharge_column: str = "00060_Mean"
-    datetime_column: str = "datetime"
-    discharge_units: str = "cfs"  # 'cfs' or 'm3s'
-    timezone: str = "America/Denver"
     
     # Baseflow separation (Lyne-Hollick parameters)
     lh_alpha: float = 0.925
@@ -50,9 +54,9 @@ class HydroBurnConfig:
     # Quality control
     max_gap_days_interpolate: int = 2
     flag_negative_values: bool = True
+    restrict_to_fire_record: bool = True  # Restrict analysis to the period of fire data
     
     # Output settings
-    output_dir: str = "output"
     figure_format: str = "png"
     figure_dpi: int = 300
     generate_html_report: bool = True
@@ -60,6 +64,10 @@ class HydroBurnConfig:
     # Derived attributes (set after loading)
     catchment_area_km2: Optional[float] = None
     run_timestamp: Optional[str] = None
+    
+    # Analysis window
+    analysis_window_years: int = 2
+    post_fire_window_months: Optional[int] = None
     
     def __post_init__(self):
         """Set derived attributes after initialization."""
@@ -162,14 +170,26 @@ def load_config(config_path: Optional[str] = None, **overrides) -> HydroBurnConf
     HydroBurnConfig
         Configuration object
     """
+    config_data = {}
     if config_path:
-        config = HydroBurnConfig.from_yaml(config_path)
-    else:
-        config = HydroBurnConfig()
-    
-    # Apply overrides
-    for key, value in overrides.items():
-        if hasattr(config, key) and value is not None:
-            setattr(config, key, value)
-    
-    return config
+        with open(config_path, 'r') as f:
+            config_data = yaml.safe_load(f)
+
+    # Apply overrides from CLI
+    config_data.update(overrides)
+
+    # Ensure required arguments are present
+    if 'streamflow_file' not in config_data:
+        raise ValueError("Missing required argument: streamflow_file")
+    if 'catchment_file' not in config_data:
+        raise ValueError("Missing required argument: catchment_file")
+
+    # Set station_id from filename if not provided
+    if 'station_id' not in config_data:
+        config_data['station_id'] = Path(config_data['streamflow_file']).stem
+
+    # Filter out any keys not in the dataclass
+    valid_keys = {f.name for f in fields(HydroBurnConfig)}
+    filtered_data = {k: v for k, v in config_data.items() if k in valid_keys}
+
+    return HydroBurnConfig(**filtered_data)

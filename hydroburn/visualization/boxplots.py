@@ -67,9 +67,9 @@ def plot_event_boxplots(
     else:
         return fig, axes
 
+
 def plot_monthly_boxplots(
     df: pd.DataFrame,
-    fire_date: str,
     discharge_col: str = "discharge",
     title: str = "Monthly Flow Distribution",
     ylabel: str = "Discharge (m³/s)",
@@ -78,31 +78,24 @@ def plot_monthly_boxplots(
     """
     Plot monthly flow distributions pre vs post fire.
     """
-    from ..io.load_streamflow import split_pre_post
-    
-    pre, post = split_pre_post(df, fire_date)
-    
-    pre = pre.copy()
-    pre['Period'] = 'Pre-fire'
-    pre['Month'] = pre.index.month
-    
-    post = post.copy()
-    post['Period'] = 'Post-fire'
-    post['Month'] = post.index.month
-    
-    combined = pd.concat([pre, post])
+    df_plot = df.copy()
+    df_plot['Month'] = df_plot.index.month
     
     fig, ax = plt.subplots(figsize=(8, 4))
     
-    sns.boxplot(x='Month', y=discharge_col, hue='Period', data=combined,
-                palette={'Pre-fire': COLORS['pre_fire'], 'Post-fire': COLORS['post_fire']},
+    sns.boxplot(x='Month', y=discharge_col, hue='period', data=df_plot,
+                palette={'Pre-fire': COLORS['pre_fire'], 'Post-fire': COLORS['post_fire'], 'Full Record': COLORS['pre_fire']},
                 ax=ax, showfliers=False)
     
     ax.set_title(title)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Month")
-    ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+    
+    # Format x-axis ticks to show month names
+    ax.set_xticks(range(12))
+    ax.set_xticklabels(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'])
+    
+    ax.legend(title='Period')
     
     plt.tight_layout()
     
@@ -111,3 +104,69 @@ def plot_monthly_boxplots(
         plt.close()
     else:
         return fig, ax
+
+
+def plot_before_after_summary(
+    summary_df: pd.DataFrame,
+    metrics: List[str] = ['mean', 'max', 'std'],
+    metric_labels: Optional[Dict[str, str]] = None,
+    output_path: Optional[str] = None
+):
+    """
+    Plot boxplots of summary statistics from before-after analysis.
+
+    This visualization compares the distribution of metrics (e.g., mean flow)
+    across all 'before' periods vs. all 'after' periods for multiple fires.
+    """
+    if metric_labels is None:
+        metric_labels = {
+            'mean': 'Mean Daily Flow (m³/s)',
+            'max': 'Max Daily Flow (m³/s)',
+            'std': 'Std. Dev. of Daily Flow (m³/s)',
+            '50%': 'Median Daily Flow (m³/s)'
+        }
+
+    # The input df is pivoted. We need to melt it for plotting.
+    plot_df = summary_df.reset_index()
+    plot_df = plot_df.melt(
+        id_vars=['fire_year', 'statistic'],
+        value_vars=['before', 'after'],
+        var_name='period',
+        value_name='value'
+    )
+
+    n_metrics = len(metrics)
+    fig, axes = plt.subplots(1, n_metrics, figsize=(4 * n_metrics, 5), sharey=False)
+    if n_metrics == 1:
+        axes = [axes]
+
+    for i, metric in enumerate(metrics):
+        ax = axes[i]
+        metric_data = plot_df[plot_df['statistic'] == metric]
+
+        if metric_data.empty:
+            continue
+
+        sns.boxplot(
+            x='period', y='value', data=metric_data, ax=ax,
+            palette={'before': COLORS['pre_fire'], 'after': COLORS['post_fire']},
+            width=0.5, showfliers=False
+        )
+        sns.stripplot(
+            x='period', y='value', data=metric_data, ax=ax,
+            color='black', alpha=0.4, size=5, jitter=True
+        )
+
+        ax.set_ylabel(metric_labels.get(metric, metric))
+        ax.set_xlabel("")
+        ax.set_title(f"Change in {metric.capitalize()}")
+        ax.set_xticklabels(['Before Fire', 'After Fire'])
+
+    fig.suptitle('Before-After Summary of Daily Flow Statistics', fontsize=16, y=1.02)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if output_path:
+        plt.savefig(output_path, bbox_inches='tight')
+        plt.close()
+    else:
+        return fig, axes

@@ -217,7 +217,7 @@ def bootstrap_flood_quantiles(
     n_bootstrap: int = 1000,
     confidence_level: float = 0.95,
     random_state: Optional[int] = None
-) -> Dict[float, FloodQuantileResult]:
+) -> pd.DataFrame:
     """
     Bootstrap confidence intervals for flood quantiles.
     
@@ -236,8 +236,8 @@ def bootstrap_flood_quantiles(
     
     Returns
     -------
-    dict
-        {return_period: FloodQuantileResult}
+    pd.DataFrame
+        DataFrame with columns: return_period, estimate, ci_lower, ci_upper, std
     """
     if random_state is not None:
         np.random.seed(random_state)
@@ -253,9 +253,13 @@ def bootstrap_flood_quantiles(
         loc, scale = fit_gumbel(annual_maxima)
         point_estimates = {T: gumbel_quantile(T, loc, scale) for T in return_periods}
     except Exception:
-        return {T: FloodQuantileResult(T, np.nan, np.nan, np.nan, np.nan) 
-                for T in return_periods}
-    
+        rows = [
+            {'return_period': T, 'estimate': np.nan, 'ci_lower': np.nan, 
+             'ci_upper': np.nan, 'std': np.nan} 
+            for T in return_periods
+        ]
+        return pd.DataFrame(rows).set_index('return_period')
+
     # Bootstrap
     for _ in range(n_bootstrap):
         # Resample with replacement
@@ -270,21 +274,24 @@ def bootstrap_flood_quantiles(
             continue
     
     # Compute statistics
-    results = {}
+    rows = []
     for T in return_periods:
         samples = np.array(bootstrap_quantiles[T])
         if len(samples) > 0:
-            results[T] = FloodQuantileResult(
-                return_period=T,
-                estimate=point_estimates[T],
-                ci_lower=np.percentile(samples, alpha * 100),
-                ci_upper=np.percentile(samples, (1 - alpha) * 100),
-                std=np.std(samples)
-            )
+            rows.append({
+                'return_period': T,
+                'estimate': point_estimates[T],
+                'ci_lower': np.percentile(samples, alpha * 100),
+                'ci_upper': np.percentile(samples, (1 - alpha) * 100),
+                'std': np.std(samples)
+            })
         else:
-            results[T] = FloodQuantileResult(T, np.nan, np.nan, np.nan, np.nan)
+            rows.append({
+                'return_period': T, 'estimate': np.nan, 'ci_lower': np.nan, 
+                'ci_upper': np.nan, 'std': np.nan
+            })
     
-    return results
+    return pd.DataFrame(rows).set_index('return_period')
 
 
 def compare_flood_quantiles(
@@ -347,10 +354,16 @@ def compare_flood_quantiles(
     alpha = (1 - confidence_level) / 2
     rows = []
     for T in return_periods:
-        pre = pre_results[T]
-        post = post_results[T]
+        # Access using .loc for DataFrame
+        pre_est = pre_results.loc[T, 'estimate']
+        pre_lower = pre_results.loc[T, 'ci_lower']
+        pre_upper = pre_results.loc[T, 'ci_upper']
         
-        ratio = post.estimate / pre.estimate if pre.estimate > 0 else np.nan
+        post_est = post_results.loc[T, 'estimate']
+        post_lower = post_results.loc[T, 'ci_lower']
+        post_upper = post_results.loc[T, 'ci_upper']
+        
+        ratio = post_est / pre_est if pre_est > 0 else np.nan
         
         rs = np.array(ratio_samples[T])
         if len(rs) > 0:
@@ -361,19 +374,19 @@ def compare_flood_quantiles(
         
         rows.append({
             'return_period': T,
-            'pre_estimate': pre.estimate,
-            'pre_ci_lower': pre.ci_lower,
-            'pre_ci_upper': pre.ci_upper,
-            'post_estimate': post.estimate,
-            'post_ci_lower': post.ci_lower,
-            'post_ci_upper': post.ci_upper,
+            'pre_estimate': pre_est,
+            'pre_ci_lower': pre_lower,
+            'pre_ci_upper': pre_upper,
+            'post_estimate': post_est,
+            'post_ci_lower': post_lower,
+            'post_ci_upper': post_upper,
             'ratio': ratio,
             'ratio_ci_lower': ratio_ci_lower,
             'ratio_ci_upper': ratio_ci_upper,
             'change_pct': (ratio - 1) * 100 if not np.isnan(ratio) else np.nan
         })
     
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows).set_index('return_period')
 
 
 def gumbel_plotting_positions(annual_maxima: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:

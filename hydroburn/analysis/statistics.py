@@ -107,65 +107,102 @@ def pre_post_statistical_tests(
         }
     except Exception as e:
         results['brunner_munzel'] = {'error': str(e)}
-    
-    # Descriptive statistics
-    results['pre_stats'] = {
-        'n': len(pre),
-        'mean': np.mean(pre),
-        'median': np.median(pre),
-        'std': np.std(pre, ddof=1),
-        'min': np.min(pre),
-        'max': np.max(pre),
-        'q25': np.percentile(pre, 25),
-        'q75': np.percentile(pre, 75),
-    }
-    
-    results['post_stats'] = {
-        'n': len(post),
-        'mean': np.mean(post),
-        'median': np.median(post),
-        'std': np.std(post, ddof=1),
-        'min': np.min(post),
-        'max': np.max(post),
-        'q25': np.percentile(post, 25),
-        'q75': np.percentile(post, 75),
-    }
-    
-    # Effect sizes
-    pre_mean = np.mean(pre)
-    post_mean = np.mean(post)
-    pre_median = np.median(pre)
-    post_median = np.median(post)
-    
-    results['effect'] = {
-        'mean_diff': post_mean - pre_mean,
-        'median_diff': post_median - pre_median,
-        'mean_ratio': post_mean / pre_mean if pre_mean != 0 else np.nan,
-        'median_ratio': post_median / pre_median if pre_median != 0 else np.nan,
-        'pct_change_mean': ((post_mean - pre_mean) / pre_mean * 100) if pre_mean != 0 else np.nan,
-        'pct_change_median': ((post_median - pre_median) / pre_median * 100) if pre_median != 0 else np.nan,
-    }
-    
-    # Cohen's d effect size
-    pooled_std = np.sqrt(((len(pre)-1)*np.var(pre, ddof=1) + (len(post)-1)*np.var(post, ddof=1)) / 
-                         (len(pre) + len(post) - 2))
-    if pooled_std > 0:
-        cohens_d = (post_mean - pre_mean) / pooled_std
-        results['effect']['cohens_d'] = cohens_d
         
-        # Interpret effect size
-        d_abs = abs(cohens_d)
-        if d_abs < 0.2:
-            effect_interp = 'negligible'
-        elif d_abs < 0.5:
-            effect_interp = 'small'
-        elif d_abs < 0.8:
-            effect_interp = 'medium'
-        else:
-            effect_interp = 'large'
-        results['effect']['effect_size_interpretation'] = effect_interp
+    # Effect size (Cliff's Delta)
+    try:
+        # Calculate ranks
+        all_values = np.concatenate([pre, post])
+        rank_vals = stats.rankdata(np.concatenate([pre, post]))
+        
+        # Separate ranks
+        n = len(pre)
+        rank_pre = rank_vals[:n]
+        rank_post = rank_vals[n:]
+        
+        # Calculate Cliff's Delta
+        cliffs_delta = (np.sum(rank_pre) / (n * len(post)) - (n + 1) / 2) - \
+                       (np.sum(rank_post) / (n * len(pre)) - (n + 1) / 2)
+        
+        results['effect'] = {
+            'cliffs_delta': cliffs_delta,
+            'percent_change_median': ((np.median(post) - np.median(pre)) / np.median(pre) * 100) 
+                                  if np.median(pre) > 0 else np.nan,
+            'percent_change_mean': ((np.mean(post) - np.mean(pre)) / np.mean(pre) * 100)
+                                if np.mean(pre) > 0 else np.nan
+        }
+    except Exception as e:
+        results['effect'] = {'error': str(e)}
     
     return results
+
+
+def perform_before_after_analysis(
+    df: pd.DataFrame,
+    fire_years: List[int],
+    window_years: int,
+    discharge_col: str = "discharge"
+) -> pd.DataFrame:
+    """
+    Performs a before-and-after analysis for each fire event.
+
+    For each fire, it calculates summary statistics for a defined window
+    before and after the event.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with a DatetimeIndex and discharge data.
+    fire_years : List[int]
+        A list of years in which significant fires occurred.
+    window_years : int
+        The number of years to include in the 'before' and 'after' windows.
+    discharge_col : str
+        The name of the discharge column.
+
+    Returns
+    -------
+    pd.DataFrame
+        A DataFrame containing the summary statistics for each fire's
+        before and after period.
+    """
+    results = []
+    window_delta = pd.Timedelta(days=window_years * 365.25)
+
+    for year in fire_years:
+        fire_date = pd.to_datetime(f'{year}-01-01')
+        if df.index.tz is not None and fire_date.tz is None:
+            fire_date = fire_date.tz_localize(df.index.tz)
+
+        # Define before and after periods
+        before_start = fire_date - window_delta
+        before_end = fire_date - pd.Timedelta(days=1)
+        after_start = fire_date
+        after_end = fire_date + window_delta
+
+        # Slice the dataframe
+        df_before = df.loc[before_start:before_end]
+        df_after = df.loc[after_start:after_end]
+
+        if df_before.empty or df_after.empty:
+            continue
+
+        # Calculate stats
+        stats_before = df_before[discharge_col].describe()
+        stats_after = df_after[discharge_col].describe()
+
+        # Combine and store
+        period_results = pd.concat([stats_before, stats_after], keys=['before', 'after'])
+        period_results['fire_year'] = year
+        results.append(period_results.unstack(level=0))
+
+    if not results:
+        return pd.DataFrame()
+
+    summary_df = pd.concat(results)
+    summary_df = summary_df.reset_index().rename(columns={'index': 'statistic'})
+    summary_df = summary_df.set_index(['fire_year', 'statistic'])
+
+    return summary_df
 
 
 def pettitt_test(x: np.ndarray) -> Tuple[int, float, float]:
@@ -339,80 +376,65 @@ def sens_slope(x: np.ndarray) -> Tuple[float, float, float]:
 
 
 def compute_summary_statistics(
-    df: pd.DataFrame,
-    discharge_col: str = "discharge",
-    fire_date: str = None,
-    baseflow_col: str = "baseflow"
-) -> pd.DataFrame:
+    pre_series: Optional[pd.Series],
+    post_series: Optional[pd.Series]
+) -> Dict:
     """
-    Compute comprehensive summary statistics.
+    Compute summary statistics for pre- and post-fire series.
     
     Parameters
     ----------
-    df : pandas.DataFrame
-        Streamflow data with datetime index
-    discharge_col : str
-        Name of discharge column
-    fire_date : str
-        Fire date for pre/post split
-    baseflow_col : str
-        Name of baseflow column (if available)
+    pre_series : pd.Series, optional
+        Pre-fire discharge series.
+    post_series : pd.Series, optional
+        Post-fire discharge series.
     
     Returns
     -------
-    pandas.DataFrame
-        Summary statistics table
+    dict
+        A dictionary containing summary statistics for each period.
     """
-    from ..io.load_streamflow import split_pre_post
     
-    stats_list = []
-    
-    # Overall statistics
-    Q = df[discharge_col]
-    stats_list.append({
-        'period': 'Overall',
-        'n_days': len(Q),
-        'n_valid': Q.notna().sum(),
-        'mean': Q.mean(),
-        'median': Q.median(),
-        'std': Q.std(),
-        'cv': Q.std() / Q.mean() if Q.mean() > 0 else np.nan,
-        'min': Q.min(),
-        'max': Q.max(),
-        'q10': Q.quantile(0.9),  # Q10 = exceeded 10% of time
-        'q50': Q.quantile(0.5),
-        'q90': Q.quantile(0.1),  # Q90 = exceeded 90% of time
-    })
-    
-    # Pre/post if fire_date provided
-    if fire_date:
-        pre_df, post_df = split_pre_post(df, fire_date)
-        
-        for period, sub_df in [('Pre-fire', pre_df), ('Post-fire', post_df)]:
-            Q = sub_df[discharge_col]
-            row = {
-                'period': period,
-                'n_days': len(Q),
-                'n_valid': Q.notna().sum(),
-                'mean': Q.mean(),
-                'median': Q.median(),
-                'std': Q.std(),
-                'cv': Q.std() / Q.mean() if Q.mean() > 0 else np.nan,
-                'min': Q.min(),
-                'max': Q.max(),
-                'q10': Q.quantile(0.9),
-                'q50': Q.quantile(0.5),
-                'q90': Q.quantile(0.1),
+    def _get_stats(series: pd.Series) -> Dict:
+        """Helper to calculate stats for a single series."""
+        if series is None or series.empty:
+            return {
+                'n_days': 0, 'n_valid': 0, 'mean': np.nan, 'median': np.nan,
+                'std': np.nan, 'cv': np.nan, 'min': np.nan, 'max': np.nan,
+                'q10': np.nan, 'q50': np.nan, 'q90': np.nan
             }
-            
-            # Add BFI if available
-            if baseflow_col in sub_df.columns:
-                Qb = sub_df[baseflow_col]
-                row['bfi'] = Qb.sum() / Q.sum() if Q.sum() > 0 else np.nan
-            
-            stats_list.append(row)
+        
+        mean_val = series.mean()
+        return {
+            'n_days': len(series),
+            'n_valid': series.notna().sum(),
+            'mean': mean_val,
+            'median': series.median(),
+            'std': series.std(),
+            'cv': series.std() / mean_val if mean_val > 0 else np.nan,
+            'min': series.min(),
+            'max': series.max(),
+            'q10': series.quantile(0.9),
+            'q50': series.quantile(0.5),
+            'q90': series.quantile(0.1),
+        }
+
+    results = {
+        "pre_fire": _get_stats(pre_series),
+        "post_fire": _get_stats(post_series)
+    }
     
-    return pd.DataFrame(stats_list)
+    if pre_series is not None and post_series is not None:
+        full_series = pd.concat([pre_series, post_series])
+        results["overall"] = _get_stats(full_series)
+    elif pre_series is not None:
+        results["overall"] = _get_stats(pre_series)
+    elif post_series is not None:
+        results["overall"] = _get_stats(post_series)
+    else:
+        results["overall"] = _get_stats(pd.Series(dtype=float))
+
+    return results
 
 
 def test_seasonality_shift(
@@ -531,7 +553,7 @@ def compare_event_distributions(
             'metric': name,
             'pre_mean': pre_stats.get('mean'),
             'post_mean': post_stats.get('mean'),
-            'change_mean_pct': effect.get('pct_change_mean'),
+            'change_mean_pct': effect.get('percent_change_mean'),
             'pvalue': mann_whitney.get('pvalue'),
             'significant': mann_whitney.get('significant'),
         })

@@ -249,6 +249,8 @@ cython_debug/
 output/
 streamflows/
 catchments/
+fire/
+precipitation/
 tests/__pycache__/
 hydroburn/__pycache__/
 hydroburn/analysis/__pycache__/
